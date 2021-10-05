@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 using namespace std;
 
@@ -38,29 +39,24 @@ vector<string> SplitIntoWords(const string& text) {
     return words;
 }
 
-set<string> ParseStopWords(const string& text) {
-    set<string> stop_words;
-    for (const string& word : SplitIntoWords(text)) {
-        stop_words.insert(word);
-    }
-    return stop_words;
-}
-
 struct Document {
     int id;
-    int relevance;
+    double relevance;
 };
-
-bool HasDocumentGreaterRelevance(const Document& lhs, const Document& rhs) {
-    return lhs.relevance > rhs.relevance;
-}
 
 class SearchServer {
 public:
     void AddDocument(int document_id, const string& document) {
-        for (const string& word : SplitIntoWordsNoStop(document)) {
-            word_to_documents_[word].insert(document_id);
+        const vector<string> words = SplitIntoWordsNoStop(document);
+        for (const string& word : words) {
+            ++word_to_document_freqs_[word][document_id];
         }
+        for (const string& word : words) {
+            if (word_to_document_freqs_[word][document_id] >= 1.0) {
+                word_to_document_freqs_[word][document_id] /= words.size();
+            }
+        }
+        ++document_count_;
     }
 
     void SetStopWords(const string& text) {
@@ -71,7 +67,13 @@ public:
 
     vector<Document> FindTopDocuments(const string& query) const {
         auto matched_documents = FindAllDocuments(query);
-        sort(matched_documents.begin(), matched_documents.end(), HasDocumentGreaterRelevance);
+        sort(
+            matched_documents.begin(), 
+            matched_documents.end(), 
+            [](const Document& lhs, const Document& rhs) {
+                return lhs.relevance > rhs.relevance;
+            }
+        );
 
         if (matched_documents.size() > MAX_RESULT_DOCUMENT_COUNT) {
             matched_documents.resize(MAX_RESULT_DOCUMENT_COUNT);
@@ -80,9 +82,19 @@ public:
         return matched_documents;
     }    
 
+    void Print() const {
+        for (const auto& [word, doc_fr] : word_to_document_freqs_) {
+            cout << word << endl;
+            for (auto [document_id, relevance] : doc_fr) {
+                cout << "{ document_id = "s << document_id << ", relevance = "s << relevance << " }"s << endl;
+            }
+        }
+    }
+
 private:
-    map<string, set<int>> word_to_documents_;
+    map<string, map<int, double>> word_to_document_freqs_;
     set<string> stop_words_;
+    int document_count_ = 0;
 
     vector<string> SplitIntoWordsNoStop(const string& text) const {
         vector<string> words;
@@ -94,15 +106,47 @@ private:
         return words;
     }
 
-    vector<Document> FindAllDocuments(const string& query) const {
-        const vector<string> query_words = SplitIntoWordsNoStop(query);
-        map<int, int> document_to_relevance;
+    struct Query {
+        vector<string> plus_words;
+        vector<string> minus_words;
+    };
+
+    Query ParseQuery(const string& text) const {
+        const vector<string> query_words = SplitIntoWordsNoStop(text);
+        Query query;
         for (const string& word : query_words) {
-            if (word_to_documents_.count(word) == 0) {
+            if (word.empty()) {
                 continue;
             }
-            for (const int document_id : word_to_documents_.at(word)) {
-                ++document_to_relevance[document_id];
+            if ('-' == word[0]) {
+                query.minus_words.push_back(word.substr(1));
+            } else {
+                query.plus_words.push_back(word);
+            }
+        }
+        return query;
+    }
+    
+    vector<Document> FindAllDocuments(const string& query_text) const {
+        map<int, double> document_to_relevance;
+
+        const Query query = ParseQuery(query_text);
+        for (const string& word : query.plus_words) {
+            if (word_to_document_freqs_.count(word) == 0) {
+                continue;
+            }
+            const auto& document_freqs = word_to_document_freqs_.at(word);
+            for (const auto [document_id, term_frequancy] : document_freqs) {
+                const double inverse_document_frequency = log(static_cast<double>(document_count_) / document_freqs.size());
+                document_to_relevance[document_id] += (inverse_document_frequency * term_frequancy);
+            }
+        }
+        for (const string& word : query.minus_words) {
+            if (word_to_document_freqs_.count(word) == 0) {
+                continue;
+            }
+            for (const auto [document_id, _] : word_to_document_freqs_.at(word)) {
+                document_to_relevance.erase(document_id);
             }
         }
 
