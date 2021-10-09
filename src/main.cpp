@@ -45,7 +45,7 @@ vector<string> SplitIntoWords(const string& text) {
     return words;
 }
     
-enum DocumentStatus {
+enum class DocumentStatus {
     ACTUAL,
     IRRELEVANT, 
     BANNED, 
@@ -81,6 +81,10 @@ public:
 
         sort(matched_documents.begin(), matched_documents.end(),
              [](const Document& lhs, const Document& rhs) {
+                 const double epsilon = 10e-6;
+                 if (abs(lhs.relevance - rhs.relevance) < epsilon) {
+                     return lhs.rating > rhs.rating;
+                 }
                  return lhs.relevance > rhs.relevance;
              });
         if (matched_documents.size() > MAX_RESULT_DOCUMENT_COUNT) {
@@ -89,6 +93,31 @@ public:
         return matched_documents;
     }
     
+    tuple<vector<string>, DocumentStatus> MatchDocument(const string& raw_query, int document_id) const {
+        const Query query = ParseQuery(raw_query);
+        
+        for (const string& word : query.minus_words) {
+            if (word_to_document_freqs_.count(word) && word_to_document_freqs_.at(word).count(document_id)) {
+                return {{}, documents_.at(document_id).status};
+            }
+        }
+
+        vector<string> matched_words;
+        for (const string& word : query.plus_words) {
+            if (word_to_document_freqs_.count(word) == 0) {
+                continue;
+            }  
+            if (word_to_document_freqs_.at(word).count(document_id)) {
+                matched_words.push_back(word);
+            }
+        }
+        return {matched_words, documents_.at(document_id).status};
+    }
+
+    size_t GetDocumentCount() const {
+        return documents_.size();
+    }
+
 private:
     struct DocumentData {
         int rating;
