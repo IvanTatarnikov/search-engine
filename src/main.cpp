@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <deque>
 
 using namespace std;
 
@@ -427,8 +428,65 @@ auto Paginate(const Container& c, size_t page_size) {
     return Paginator(begin(c), end(c), page_size);
 }
 
+class RequestQueue {
+public:
+    explicit RequestQueue(const SearchServer& search_server)
+        : search_server_(search_server) 
+    {
+        // напишите реализацию
+    }
+    // сделаем "обёртки" для всех методов поиска, чтобы сохранять результаты для нашей статистики
+    template <typename DocumentPredicate>
+    vector<Document> AddFindRequest(const string& raw_query, DocumentPredicate document_predicate) {
+        const auto documents_ = search_server_.FindTopDocuments(raw_query, document_predicate);
+        UpdateRequests(documents_);
+        return documents_;
+    }
+
+    vector<Document> AddFindRequest(const string& raw_query, DocumentStatus status) {
+        // напишите реализацию
+        const auto documents_ = search_server_.FindTopDocuments(raw_query, status);
+        UpdateRequests(documents_);
+        return documents_;
+    }
+
+    vector<Document> AddFindRequest(const string& raw_query) {
+        const auto documents_ = search_server_.FindTopDocuments(raw_query);
+        UpdateRequests(documents_);
+        return documents_;
+    }
+
+    int GetNoResultRequests() const {
+        return not_found_count_;
+    }
+private:
+    struct QueryResult {
+        // определите, что должно быть в структуре
+        vector<Document> documents;
+    };
+    deque<QueryResult> requests_;
+    const static int sec_in_day_ = 1440;
+    // возможно, здесь вам понадобится что-то ещё
+    int not_found_count_ = 0;
+    const SearchServer& search_server_;
+    
+    void UpdateRequests(const vector<Document>&  documents) {
+        requests_.push_back({documents});
+        if (documents.empty()) {
+            ++not_found_count_;
+        }
+        if (requests_.size() > sec_in_day_) {
+            if (requests_.front().documents.empty()) {
+                --not_found_count_;
+            }
+            requests_.pop_back();
+        }   
+    }
+};
+
 int main() {
     SearchServer search_server("и в на"s);
+    RequestQueue request_queue(search_server);
 
     search_server.AddDocument(1, "пушистый кот пушистый хвост"s, DocumentStatus::ACTUAL, {7, 2, 7});
     search_server.AddDocument(2, "пушистый пёс и модный ошейник"s, DocumentStatus::ACTUAL, {1, 2, 3});
@@ -436,15 +494,16 @@ int main() {
     search_server.AddDocument(4, "большой пёс скворец евгений"s, DocumentStatus::ACTUAL, {1, 3, 2});
     search_server.AddDocument(5, "большой пёс скворец василий"s, DocumentStatus::ACTUAL, {1, 1, 1});
 
-    const auto search_results = search_server.FindTopDocuments("пушистый пёс"s);
-    int page_size = 2;
-    const auto pages = Paginate(search_results, page_size);
-
-    // Выводим найденные документы по страницам
-    for (auto page = pages.begin(); page != pages.end(); ++page) {
-        cout << *page << endl;
-        cout << "Разрыв страницы"s << endl;
+    // 1439 запросов с нулевым результатом
+    for (int i = 0; i < 1439; ++i) {
+        request_queue.AddFindRequest("пустой запрос"s);
     }
-
-    return 0;
+    // все еще 1439 запросов с нулевым результатом
+    request_queue.AddFindRequest("пушистый пёс"s);
+    // новые сутки, первый запрос удален, 1438 запросов с нулевым результатом
+    request_queue.AddFindRequest("большой ошейник"s);
+    // первый запрос удален, 1437 запросов с нулевым результатом
+    request_queue.AddFindRequest("скворец"s);
+    cout << "Запросов, по которым ничего не нашлось "s << request_queue.GetNoResultRequests();
+        return 0;
 }
